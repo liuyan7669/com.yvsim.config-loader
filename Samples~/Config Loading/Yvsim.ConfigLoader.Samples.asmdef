@@ -1,0 +1,7 @@
+{
+  "name": "Yvsim.ConfigLoader.Samples",
+  "rootNamespace": "Yvsim.ConfigLoader.Samples",
+  "references": [
+    "Yvsim.ConfigLoader"
+  ]
+}

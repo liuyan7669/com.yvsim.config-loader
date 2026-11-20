@@ -1,0 +1,362 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+#if UNITY_EDITOR
+using System.IO;
+using System.Text;
+using UnityEditor;
+#endif
+
+namespace Yvsim.ConfigLoader
+{
+    /// <summary>
+    /// 对话配置数据。
+    /// 对应 StreamingAssets/dialogues.json 的根节点数据。
+    /// </summary>
+    /// <remarks>
+    /// 序列化字段名与 JSON 字段一一对应，不应随 C# 命名风格调整。
+    /// </remarks>
+    [Serializable]
+    public class DialogueConfig
+    {
+        [NonSerialized]
+        private TextLoader textLoader;
+
+        private TextLoader Loader
+        {
+            get
+            {
+                if (textLoader == null)
+                {
+                    textLoader = new TextLoader();
+                }
+
+                return textLoader;
+            }
+        }
+
+        /// <summary>
+        /// 对话表列表，每张表通过 tableName 标识使用范围。
+        /// </summary>
+        [Tooltip("对话表列表，每张表使用不重复的范围标识组织一组对话。")]
+        [SerializeField]
+        private List<DialogueTableData> tables = new List<DialogueTableData>();
+
+        /// <summary>
+        /// 获取只读的对话表列表。
+        /// </summary>
+        public IReadOnlyList<DialogueTableData> Tables
+        {
+            get
+            {
+                EnsureTables();
+                return tables;
+            }
+        }
+
+        /// <summary>
+        /// 当前是否正在加载对话配置。
+        /// </summary>
+        public bool IsLoading => Loader.IsLoading;
+
+        /// <summary>
+        /// 读取对话 JSON 配置内容。
+        /// </summary>
+        /// <param name="content">dialogues.json 的完整 JSON 字符串。</param>
+        /// <returns>解析成功返回 true，解析失败返回 false。</returns>
+        public bool ReadJson(string content)
+        {
+            if (string.IsNullOrEmpty(content))
+            {
+                return false;
+            }
+
+            try
+            {
+                content = content.TrimStart('\uFEFF');
+                DialogueConfig config = JsonUtility.FromJson<DialogueConfig>(content);
+                tables = config?.tables ?? new List<DialogueTableData>();
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError($"Parse dialogues.json failed: {exception.Message}");
+                tables = new List<DialogueTableData>();
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 从指定地址读取并解析对话 JSON 配置。
+        /// </summary>
+        /// <param name="filePath">JSON 文件的完整路径或 URL。</param>
+        /// <param name="onCompleted">读取完成后的回调，成功时参数为 true。</param>
+        public void ReadJsonFileAsync(string filePath, Action<bool> onCompleted)
+        {
+            Loader.LoadAsync(filePath, success =>
+            {
+                if (!success)
+                {
+                    onCompleted?.Invoke(false);
+                    return;
+                }
+
+                onCompleted?.Invoke(ReadJson(Loader.Content));
+            });
+        }
+
+        /// <summary>
+        /// 强制停止当前正在进行的对话配置加载。
+        /// </summary>
+        public void StopLoading()
+        {
+            Loader.StopLoading();
+        }
+
+        /// <summary>
+        /// 停止当前加载并重新读取指定的对话配置。
+        /// </summary>
+        /// <param name="filePath">JSON 文件的完整路径或 URL。</param>
+        /// <param name="onCompleted">重新加载完成后的回调，成功时参数为 true。</param>
+        public void ReloadJsonFileAsync(string filePath, Action<bool> onCompleted)
+        {
+            ReadJsonFileAsync(filePath, onCompleted);
+        }
+
+        /// <summary>
+        /// 获取对话表数量。
+        /// </summary>
+        public int Count => tables == null ? 0 : tables.Count;
+
+        /// <summary>
+        /// 按使用范围标识获取对话表数据。
+        /// </summary>
+        /// <param name="tableName">使用范围标识。</param>
+        /// <returns>找到时返回对话表数据，否则返回 null。</returns>
+        public DialogueTableData GetTableByName(string tableName)
+        {
+            TryGetTableByName(tableName, out DialogueTableData table);
+            return table;
+        }
+
+        /// <summary>
+        /// 尝试按使用范围标识获取对话表数据。
+        /// </summary>
+        /// <param name="tableName">使用范围标识。</param>
+        /// <param name="table">找到的对话表数据。</param>
+        /// <returns>找到匹配使用范围标识时返回 true，否则返回 false。</returns>
+        public bool TryGetTableByName(string tableName, out DialogueTableData table)
+        {
+            EnsureTables();
+
+            for (int i = 0; i < tables.Count; i++)
+            {
+                if (tables[i] != null && tables[i].tableName == tableName)
+                {
+                    table = tables[i];
+                    return true;
+                }
+            }
+
+            table = null;
+            return false;
+        }
+
+        /// <summary>
+        /// 按使用范围标识获取对话列表。
+        /// </summary>
+        /// <param name="tableName">使用范围标识。</param>
+        /// <returns>找到时返回该范围下的对话列表，否则返回空列表。</returns>
+        public List<DialogueItemData> GetDialoguesByTableName(string tableName)
+        {
+            if (TryGetTableByName(tableName, out DialogueTableData table))
+            {
+                return table.GetDialogues();
+            }
+
+            return new List<DialogueItemData>();
+        }
+
+        /// <summary>
+        /// 确保对话表列表不为空引用。
+        /// </summary>
+        private void EnsureTables()
+        {
+            if (tables == null)
+            {
+                tables = new List<DialogueTableData>();
+            }
+        }
+
+#if UNITY_EDITOR
+        private const string DemoFileName = "dialogues.json";
+        private const string StreamingAssetsFolderName = "StreamingAssets";
+
+        /// <summary>
+        /// 示例对话 JSON 内容。
+        /// </summary>
+        private const string DemoJson =
+    @"{
+    ""tables"": [
+        {
+            ""tableName"": ""Opening"",
+            ""dialogues"": [
+                {
+                    ""name"": ""教师"",
+                    ""speaker"": ""主角"",
+                    ""content"": ""欢迎来到文商精神探秘的世界！"",
+                    ""audioPath"": """",
+                    ""idleAnimation"": ""Idle"",
+                    ""talkAnimation"": ""Talk"",
+                    ""isPlayer"": true
+                },
+                {
+                    ""name"": ""教师"",
+                    ""speaker"": ""教师"",
+                    ""content"": ""请跟随提示完成接下来的探索。"",
+                    ""audioPath"": """",
+                    ""idleAnimation"": ""Idle"",
+                    ""talkAnimation"": ""Talk"",
+                    ""isPlayer"": false
+                }
+            ]
+        },
+        {
+            ""tableName"": ""Scene_001"",
+            ""dialogues"": [
+                {
+                    ""name"": ""学生"",
+                    ""speaker"": ""学生"",
+                    ""content"": ""这里就是第一个探索场景吗？"",
+                    ""audioPath"": """",
+                    ""idleAnimation"": ""Idle"",
+                    ""talkAnimation"": ""Talk"",
+                    ""isPlayer"": true
+                }
+            ]
+        }
+    ]
+}";
+
+        /// <summary>
+        /// 在 StreamingAssets 目录下创建对话配置示例文件。
+        /// </summary>
+        [MenuItem("Yvsim/配置/模板/创建 dialogues.json 示例")]
+        private static void CreateDialoguesJsonDemo()
+        {
+            CreateDemoJson(DemoFileName, DemoJson);
+        }
+
+        /// <summary>
+        /// 创建示例 JSON 文件。
+        /// </summary>
+        /// <param name="fileName">示例文件名。</param>
+        /// <param name="content">示例文件内容。</param>
+        private static void CreateDemoJson(string fileName, string content)
+        {
+            string folderPath = Path.Combine(Application.dataPath, StreamingAssetsFolderName);
+            Directory.CreateDirectory(folderPath);
+
+            string filePath = Path.Combine(folderPath, fileName);
+            if (File.Exists(filePath))
+            {
+                Debug.LogWarning($"示例文件已存在，未覆盖：{filePath}");
+                return;
+            }
+
+            File.WriteAllText(filePath, content, new UTF8Encoding(false));
+            AssetDatabase.Refresh();
+            Debug.Log($"已创建示例文件：{filePath}");
+        }
+#endif
+    }
+
+    /// <summary>
+    /// 单张对话表数据。
+    /// </summary>
+    /// <remarks>
+    /// 公共字段名属于 dialogues.json 的序列化契约。
+    /// </remarks>
+    [Serializable]
+    public class DialogueTableData
+    {
+        /// <summary>
+        /// 使用范围标识，不同对话表之间不重复。
+        /// </summary>
+        [Tooltip("对话表的使用范围标识，用于按名称查找；不同表应使用不同标识。")]
+        public string tableName;
+
+        /// <summary>
+        /// 当前使用范围下的对话列表。
+        /// </summary>
+        [Tooltip("本表中的对话条目，按列表顺序组织显示内容、说话人物和配套动画。")]
+        public List<DialogueItemData> dialogues = new List<DialogueItemData>();
+
+        /// <summary>
+        /// 获取当前对话表中的全部对话。
+        /// </summary>
+        /// <returns>对话列表。</returns>
+        public List<DialogueItemData> GetDialogues()
+        {
+            if (dialogues == null)
+            {
+                dialogues = new List<DialogueItemData>();
+            }
+
+            return dialogues;
+        }
+    }
+
+    /// <summary>
+    /// 单条对话数据。
+    /// </summary>
+    /// <remarks>
+    /// 公共字段名属于 dialogues.json 的序列化契约。
+    /// </remarks>
+    [Serializable]
+    public class DialogueItemData
+    {
+        /// <summary>
+        /// 对外展示的名字，用于 UI 界面。
+        /// </summary>
+        [Tooltip("对话界面中展示的人物名称。")]
+        public string name;
+
+        /// <summary>
+        /// 人物模型物体的名字，用于定位说话模型。
+        /// </summary>
+        [Tooltip("说话人物模型的物体名称，供业务代码定位对应人物。")]
+        public string speaker;
+
+        /// <summary>
+        /// 显示的文字内容。
+        /// </summary>
+        [Tooltip("本条对话显示的文字内容。")]
+        public string content;
+
+        /// <summary>
+        /// 对话音频路径。
+        /// </summary>
+        [Tooltip("本条对话的音频路径，由业务播放逻辑读取；留空表示未配置配套音频。")]
+        public string audioPath;
+
+        /// <summary>
+        /// 未说话或说话完成时播放的动画。
+        /// </summary>
+        [Tooltip("人物未说话或本条对话结束时使用的待机动画名称。")]
+        public string idleAnimation;
+
+        /// <summary>
+        /// 播放音频及文字时播放的动画。
+        /// </summary>
+        [Tooltip("显示本条对话文字或播放音频时使用的说话动画名称。")]
+        public string talkAnimation;
+
+        /// <summary>
+        /// 当前对话是否是主角在说。
+        /// </summary>
+        [Tooltip("标记本条对话是否由主角说出，供业务界面和人物控制逻辑区分。")]
+        public bool isPlayer;
+    }
+}
